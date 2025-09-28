@@ -1,13 +1,14 @@
 import { useState, useEffect } from "react"
-import { AlertCircleIcon, PaperclipIcon, UploadIcon, XIcon } from "lucide-react"
+import { AlertCircleIcon, PaperclipIcon, UploadIcon, XIcon, Loader2 } from "lucide-react"
 import { formatBytes, useFileUpload } from "@/hooks/use-file-upload"
 import { Button } from "@/components/ui/button"
 import axios from "axios"
 
-
-export default function Component() {
+export default function Component({ onExtracted }) {
   const maxSize = 10 * 1024 * 1024 // 10MB
   const [extractedInfo, setExtractedInfo] = useState(null)
+  const [isProcessing, setIsProcessing] = useState(false)
+  const [processingStatus, setProcessingStatus] = useState("")
 
   const [
     { files, isDragging, errors },
@@ -26,45 +27,68 @@ export default function Component() {
 
   // Function to upload file to backend
   const uploadFileToBackend = async (file) => {
-  try {
-    console.log("Uploading file:", file.file.name, file.file.type, file.file.size)
+    setIsProcessing(true)
+    setProcessingStatus("Uploading file...")
     
-    const formData = new FormData()
-    formData.append("file", file.file)
+    try {
+      console.log("Uploading file:", file.file.name, file.file.type, file.file.size)
+      
+      const formData = new FormData()
+      formData.append("file", file.file)
 
-    const res = await axios.post("http://localhost:5000/extract", formData, {
-      headers: {
-        'Content-Type': 'multipart/form-data'
+      setProcessingStatus("Analyzing document...")
+
+      const res = await axios.post("http://localhost:5000/extract", formData, {
+        headers: {
+          'Content-Type': 'multipart/form-data'
+        },
+        timeout: 120000, // 2 minutes timeout for OCR processing
+        onUploadProgress: (progressEvent) => {
+          const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total)
+          setProcessingStatus(`Uploading file... ${percentCompleted}%`)
+        }
+      })
+      
+      console.log("Success response:", res.data)
+      setExtractedInfo(res.data.extracted)
+      onExtracted(res.data.extracted)
+      setProcessingStatus("")
+    } catch (err) {
+      console.error("Error uploading file:", err)
+      console.error("Error response:", err.response?.data)
+      
+      let errorMessage = "Failed to extract info"
+      
+      if (err.code === 'ECONNABORTED') {
+        errorMessage = "Processing timeout. Please try with a smaller file or clearer document."
+      } else if (err.response?.data?.error) {
+        errorMessage = err.response.data.error
+      } else if (err.message) {
+        errorMessage = err.message
       }
-    })
-    
-    console.log("Success response:", res.data)
-    setExtractedInfo(res.data.extracted)
-  } catch (err) {
-    console.error("Error uploading file:", err)
-    console.error("Error response:", err.response?.data)
-    
-    const errorMessage = err.response?.data?.error || "Failed to extract info"
-    
-    // Handle scanned PDF error specifically
-    if (errorMessage.includes("scanned") || errorMessage.includes("No text found")) {
-      setExtractedInfo({ 
-        error: "This appears to be a scanned PDF. Please manually enter your information below:",
-        isScanned: true,
-        name: "",
-        email: "",
-        phone: ""
-      })
-    } else {
-      setExtractedInfo({ 
-        error: errorMessage,
-        name: "",
-        email: "", 
-        phone: ""
-      })
+      
+      // Handle different types of errors
+      if (errorMessage.includes("scanned") || errorMessage.includes("No text found") || errorMessage.includes("OCR could not extract")) {
+        setExtractedInfo({ 
+          error: "This appears to be a scanned PDF or the text quality is too low for automatic extraction. Please manually enter your information below:",
+          isScanned: true,
+          name: "",
+          email: "",
+          phone: ""
+        })
+      } else {
+        setExtractedInfo({ 
+          error: errorMessage,
+          name: "",
+          email: "", 
+          phone: ""
+        })
+      }
+      setProcessingStatus("")
+    } finally {
+      setIsProcessing(false)
     }
   }
-}
 
   // Call backend whenever a new file is uploaded
   useEffect(() => {
@@ -72,6 +96,7 @@ export default function Component() {
       uploadFileToBackend(file)
     } else {
       setExtractedInfo(null)
+      setProcessingStatus("")
     }
   }, [file])
 
@@ -92,7 +117,7 @@ export default function Component() {
           {...getInputProps()}
           className="sr-only"
           aria-label="Upload file"
-          disabled={Boolean(file)}
+          disabled={Boolean(file) || isProcessing}
         />
 
         <div className="flex flex-col items-center justify-center text-center">
@@ -100,11 +125,20 @@ export default function Component() {
             className="bg-background mb-2 flex size-11 shrink-0 items-center justify-center rounded-full border"
             aria-hidden="true"
           >
-            <UploadIcon className="size-4 opacity-60" />
+            {isProcessing ? (
+              <Loader2 className="size-4 opacity-60 animate-spin" />
+            ) : (
+              <UploadIcon className="size-4 opacity-60" />
+            )}
           </div>
-          <p className="mb-1.5 text-sm font-medium">Upload file</p>
+          <p className="mb-1.5 text-sm font-medium">
+            {isProcessing ? "Processing..." : "Upload file"}
+          </p>
           <p className="text-muted-foreground text-xs">
-            Drag & drop or click to browse (max. {formatBytes(maxSize)})
+            {isProcessing 
+              ? processingStatus || "Analyzing document..."
+              : `Drag & drop or click to browse (max. ${formatBytes(maxSize)})`
+            }
           </p>
         </div>
       </div>
@@ -133,6 +167,7 @@ export default function Component() {
               className="text-muted-foreground/80 hover:text-foreground -me-2 size-8 hover:bg-transparent"
               onClick={() => removeFile(file?.id)}
               aria-label="Remove file"
+              disabled={isProcessing}
             >
               <XIcon className="size-4" aria-hidden="true" />
             </Button>
@@ -140,57 +175,17 @@ export default function Component() {
         </div>
       )}
 
-      {/* Display extracted info */}
-     {extractedInfo && (
-  <div className="mt-2 p-4 border rounded-md bg-gray-50">
-    {extractedInfo.isScanned ? (
-      <div className="space-y-3">
-        <div className="text-sm text-orange-600 bg-orange-50 p-2 rounded">
-          {extractedInfo.error}
+      {/* Processing indicator */}
+      {isProcessing && (
+        <div className="mt-2 p-4 border rounded-md bg-blue-50">
+          <div className="flex items-center gap-2">
+            <Loader2 className="size-4 animate-spin text-blue-600" />
+            <span className="text-sm text-blue-700">
+              {processingStatus || "Processing document... This may take up to 2 minutes for scanned PDFs."}
+            </span>
+          </div>
         </div>
-        <div className="space-y-2">
-          <input 
-            type="text" 
-            placeholder="Full Name" 
-            value={extractedInfo.name || ""} 
-            onChange={(e) => setExtractedInfo(prev => ({...prev, name: e.target.value}))}
-            className="w-full p-2 border rounded"
-          />
-          <input 
-            type="email" 
-            placeholder="Email Address" 
-            value={extractedInfo.email || ""} 
-            onChange={(e) => setExtractedInfo(prev => ({...prev, email: e.target.value}))}
-            className="w-full p-2 border rounded"
-          />
-          <input 
-            type="tel" 
-            placeholder="Phone Number" 
-            value={extractedInfo.phone || ""} 
-            onChange={(e) => setExtractedInfo(prev => ({...prev, phone: e.target.value}))}
-            className="w-full p-2 border rounded"
-          />
-        </div>
-        <button className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600">
-          Continue
-        </button>
-      </div>
-    ) : extractedInfo.error ? (
-      <div className="text-red-600 text-sm">
-        Error: {extractedInfo.error}
-      </div>
-    ) : (
-      <div className="space-y-2">
-        <p><strong>Name:</strong> {extractedInfo.name || "Not found"}</p>
-        <p><strong>Email:</strong> {extractedInfo.email || "Not found"}</p>
-        <p><strong>Phone:</strong> {extractedInfo.phone || "Not found"}</p>
-        <button className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600">
-          Continue
-        </button>
-      </div>
-    )}
-  </div>
-)}
+      )}
 
       <p aria-live="polite" role="region" className="text-muted-foreground mt-2 text-center text-xs">
         Single file uploader w/ max size ∙{" "}
