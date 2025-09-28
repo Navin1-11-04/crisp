@@ -4,15 +4,6 @@ import { formatBytes, useFileUpload } from "@/hooks/use-file-upload"
 import { Button } from "@/components/ui/button"
 import axios from "axios"
 
-// const initialFiles = [
-//   {
-//     name: "document.pdf",
-//     size: 1528737,
-//     type: "application/pdf",
-//     url: "https://picsum.photos/1000/800?grayscale&random=1",
-//     id: "document.pdf-1744638436563-8u5xuls",
-//   },
-// ]
 
 export default function Component() {
   const maxSize = 10 * 1024 * 1024 // 10MB
@@ -35,17 +26,45 @@ export default function Component() {
 
   // Function to upload file to backend
   const uploadFileToBackend = async (file) => {
-    try {
-      const formData = new FormData()
-      formData.append("file", file.file) // Multer expects "file" key
+  try {
+    console.log("Uploading file:", file.file.name, file.file.type, file.file.size)
+    
+    const formData = new FormData()
+    formData.append("file", file.file)
 
-      const res = await axios.post("http://localhost:5000/extract", formData)
-      setExtractedInfo(res.data.extracted)
-    } catch (err) {
-      console.error("Error uploading file:", err)
-      setExtractedInfo({ error: "Failed to extract info" })
+    const res = await axios.post("http://localhost:5000/extract", formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data'
+      }
+    })
+    
+    console.log("Success response:", res.data)
+    setExtractedInfo(res.data.extracted)
+  } catch (err) {
+    console.error("Error uploading file:", err)
+    console.error("Error response:", err.response?.data)
+    
+    const errorMessage = err.response?.data?.error || "Failed to extract info"
+    
+    // Handle scanned PDF error specifically
+    if (errorMessage.includes("scanned") || errorMessage.includes("No text found")) {
+      setExtractedInfo({ 
+        error: "This appears to be a scanned PDF. Please manually enter your information below:",
+        isScanned: true,
+        name: "",
+        email: "",
+        phone: ""
+      })
+    } else {
+      setExtractedInfo({ 
+        error: errorMessage,
+        name: "",
+        email: "", 
+        phone: ""
+      })
     }
   }
+}
 
   // Call backend whenever a new file is uploaded
   useEffect(() => {
@@ -122,14 +141,56 @@ export default function Component() {
       )}
 
       {/* Display extracted info */}
-      {extractedInfo && (
-        <div className="mt-2 p-2 border rounded-md bg-gray-50 text-sm">
-          <p><strong>Name:</strong> {extractedInfo.name || "Not found"}</p>
-          <p><strong>Email:</strong> {extractedInfo.email || "Not found"}</p>
-          <p><strong>Phone:</strong> {extractedInfo.phone || "Not found"}</p>
-          {extractedInfo.raw && <p><strong>Raw:</strong> {extractedInfo.raw}</p>}
+     {extractedInfo && (
+  <div className="mt-2 p-4 border rounded-md bg-gray-50">
+    {extractedInfo.isScanned ? (
+      <div className="space-y-3">
+        <div className="text-sm text-orange-600 bg-orange-50 p-2 rounded">
+          {extractedInfo.error}
         </div>
-      )}
+        <div className="space-y-2">
+          <input 
+            type="text" 
+            placeholder="Full Name" 
+            value={extractedInfo.name || ""} 
+            onChange={(e) => setExtractedInfo(prev => ({...prev, name: e.target.value}))}
+            className="w-full p-2 border rounded"
+          />
+          <input 
+            type="email" 
+            placeholder="Email Address" 
+            value={extractedInfo.email || ""} 
+            onChange={(e) => setExtractedInfo(prev => ({...prev, email: e.target.value}))}
+            className="w-full p-2 border rounded"
+          />
+          <input 
+            type="tel" 
+            placeholder="Phone Number" 
+            value={extractedInfo.phone || ""} 
+            onChange={(e) => setExtractedInfo(prev => ({...prev, phone: e.target.value}))}
+            className="w-full p-2 border rounded"
+          />
+        </div>
+        <button className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600">
+          Continue
+        </button>
+      </div>
+    ) : extractedInfo.error ? (
+      <div className="text-red-600 text-sm">
+        Error: {extractedInfo.error}
+      </div>
+    ) : (
+      <div className="space-y-2">
+        <p><strong>Name:</strong> {extractedInfo.name || "Not found"}</p>
+        <p><strong>Email:</strong> {extractedInfo.email || "Not found"}</p>
+        <p><strong>Phone:</strong> {extractedInfo.phone || "Not found"}</p>
+        <button className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600">
+          Continue
+        </button>
+      </div>
+    )}
+  </div>
+)}
 
       <p aria-live="polite" role="region" className="text-muted-foreground mt-2 text-center text-xs">
         Single file uploader w/ max size ∙{" "}
