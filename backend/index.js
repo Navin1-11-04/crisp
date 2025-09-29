@@ -13,200 +13,201 @@ app.use(express.json());
 
 const upload = multer({ storage: multer.memoryStorage() });
 
-// Helper: Extract all text from PDF or DOCX
+const apiKey = process.env.GEMINI_API_KEY;
+if (!apiKey) throw new Error("❌ GEMINI_API_KEY missing in .env");
+
+const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${apiKey}`;
+
+// ---------------- Extract text from files ----------------
 async function extractText(file) {
   if (file.mimetype === "application/pdf") {
-    try {
-      const data = await pdfParse(file.buffer);
-      let text = data.text;
-
-      if (!text || text.trim().length < 5) {
-        console.log("pdf-parse returned empty text, using buffer fallback...");
-        text = file.buffer.toString("utf8").replace(/[\x00-\x1F\x7F-\x9F]/g, "").trim();
-      }
-
-      if (!text || text.trim().length === 0) {
-        throw new Error("PDF appears empty or scanned.");
-      }
-
-      return text;
-    } catch (err) {
-      throw new Error("Failed to extract text from PDF: " + err.message);
-    }
+    const data = await pdfParse(file.buffer);
+    return data.text || file.buffer.toString("utf8");
   } else if (
-    file.mimetype ===
-    "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    file.mimetype === "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
   ) {
-    try {
-      const result = await mammoth.extractRawText({ buffer: file.buffer });
-      if (!result.value || result.value.trim().length < 5) {
-        throw new Error("DOCX appears empty or contains very little text.");
-      }
-      return result.value;
-    } catch (err) {
-      throw new Error("Failed to extract text from DOCX: " + err.message);
-    }
-  } else {
-    throw new Error("Unsupported file type. Only PDF and DOCX are allowed.");
+    const result = await mammoth.extractRawText({ buffer: file.buffer });
+    return result.value;
   }
+  throw new Error("Unsupported file type.");
 }
 
-// JSON schema for Gemini response
-const extractionSchema = {
-  type: "OBJECT",
-  properties: {
-    name: { type: "STRING" },
-    email: { type: "STRING" },
-    phone: { type: "STRING" },
-  },
-  propertyOrdering: ["name", "email", "phone"],
-};
-
-// Endpoint: upload file and extract structured info
+// ---------------- Resume Extraction ----------------
 app.post("/extract", upload.single("file"), async (req, res) => {
   try {
     const file = req.file;
     if (!file) return res.status(400).json({ error: "No file uploaded" });
 
-    if (file.size > 10 * 1024 * 1024) {
-      return res.status(400).json({ error: "File size exceeds 10MB limit" });
-    }
-
-    const allowedTypes = [
-      "application/pdf",
-      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    ];
-    if (!allowedTypes.includes(file.mimetype)) {
-      return res.status(400).json({ error: "Only PDF and DOCX are supported" });
-    }
-
-    // Extract text
     const text = await extractText(file);
 
-    // Gemini setup
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) throw new Error("GEMINI_API_KEY not found in environment");
-
-    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${apiKey}`;
-
     const systemInstruction = `
-You are an expert resume parser. Your task:
-1. Extract ONLY the fields: name, email, phone.
-2. Use the text exactly as it appears in the resume.
-3. If a field is missing, return "Not Found".
-4. Return output in valid JSON only. Do NOT add extra text.
-5. Always include all three fields: name, email, phone.
-`;
+You are a resume parser. Extract only:
+- name
+- email
+- phone
+Always return valid JSON { "name": "...", "email": "...", "phone": "..." }.
+If missing, use "Not Found".
+    `;
 
     const payload = {
       contents: [{ parts: [{ text }] }],
       systemInstruction: { parts: [{ text: systemInstruction }] },
-      generationConfig: {
-        responseMimeType: "application/json",
-        responseSchema: extractionSchema,
-        temperature: 0.1,
-      },
+      generationConfig: { responseMimeType: "application/json" },
     };
 
-    const response = await axios.post(apiUrl, payload, {
+    const response = await axios.post(GEMINI_URL, payload, {
       headers: { "Content-Type": "application/json" },
-      timeout: 30000,
     });
 
-    let content =
-      response.data?.candidates?.[0]?.content?.parts?.[0]?.text ||
-      response.data?.candidates?.[0]?.content?.parts?.[0] ||
-      null;
+    const content =
+      response.data?.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
 
-    let extracted;
-    try {
-      extracted = JSON.parse(content);
-    } catch {
-      extracted = { name: "Not Found", email: "Not Found", phone: "Not Found" };
-    }
-
-    res.json({ extracted });
+    res.json({ extracted: JSON.parse(content) });
   } catch (err) {
-    res.status(500).json({ error: err.message, timestamp: new Date().toISOString() });
+    res.status(500).json({ error: err.message });
   }
 });
 
-// Chat verification endpoint
+// ---------------- Chat Verification ----------------
 app.post("/chat", async (req, res) => {
   try {
     const { messages, extracted } = req.body;
 
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) throw new Error("GEMINI_API_KEY not found");
-
-    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${apiKey}`;
-
     const systemInstruction = `
-You are a chatbot that verifies resume details.
+You verify resume details.
 
-Always respond in **valid JSON** with exactly this shape:
+Return JSON:
 {
-  "reply": "Natural language reply",
-  "state": {
-    "name": "...",
-    "email": "...",
-    "phone": "..."
-  }
+  "reply": "bot response",
+  "state": { "name": "...", "email": "...", "phone": "..." },
+  "userConfirmed": false
 }
 
-- "reply" = conversational assistant response.
-- "state" = the latest known values of name, email, phone.
-- Never output extra text outside JSON.
-- If user corrects a field, update "state" accordingly.
-- If user confirms, keep "state" as is.
-- If data is missing, leave as "Not Found".
-Current extracted data: ${JSON.stringify(extracted)}
-`;
+Rules:
+- Keep "state" updated with corrections.
+- userConfirmed = true only if user explicitly confirms all details are correct.
+Current data: ${JSON.stringify(extracted)}
+    `;
 
-    const convo = messages.map(m => `${m.role}: ${m.content}`).join("\n");
+    const convo = messages.map((m) => `${m.role}: ${m.content}`).join("\n");
 
     const payload = {
       contents: [{ parts: [{ text: convo }] }],
       systemInstruction: { parts: [{ text: systemInstruction }] },
-      generationConfig: {
-        responseMimeType: "application/json",
-      },
+      generationConfig: { responseMimeType: "application/json" },
     };
 
-    const response = await axios.post(apiUrl, payload, {
+    const response = await axios.post(GEMINI_URL, payload, {
       headers: { "Content-Type": "application/json" },
-      timeout: 30000,
     });
 
     const content =
-      response.data?.candidates?.[0]?.content?.parts?.[0]?.text || null;
+      response.data?.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
+    const parsed = JSON.parse(content);
 
-    let parsed;
-    try {
-      parsed = JSON.parse(content);
-    } catch {
-      parsed = {
-        reply: "⚠️ Sorry, I couldn’t parse that.",
-        state: extracted,
-      };
-    }
+    const allFieldsFilled =
+      parsed.state.name !== "Not Found" &&
+      parsed.state.email !== "Not Found" &&
+      parsed.state.phone !== "Not Found";
 
-    res.json(parsed);
+    const verified = allFieldsFilled && parsed.userConfirmed === true;
 
+    res.json({ reply: parsed.reply, state: parsed.state, verified });
   } catch (err) {
-    console.error("Chat error:", err.message);
-    res.status(500).json({ reply: "⚠️ Error talking to AI", state: req.body.extracted });
+    res.status(500).json({
+      reply: "⚠️ Error talking to AI",
+      state: req.body.extracted,
+      verified: false,
+    });
   }
 });
 
+// ---------------- AI Interview Questions ----------------
+app.post("/generate-questions", async (req, res) => {
+  try {
+    const { role = "software developer" } = req.body;
 
+    const systemInstruction = `
+You are an interview question generator.
+Generate EXACTLY 6 questions for role: ${role}.
+Format as valid JSON array:
+[
+  { "id": 1, "text": "...", "level": "easy", "timeLimit": 30 },
+  { "id": 2, "text": "...", "level": "easy", "timeLimit": 30 },
+  { "id": 3, "text": "...", "level": "medium", "timeLimit": 45 },
+  { "id": 4, "text": "...", "level": "medium", "timeLimit": 45 },
+  { "id": 5, "text": "...", "level": "hard", "timeLimit": 60 },
+  { "id": 6, "text": "...", "level": "hard", "timeLimit": 60 }
+]
+Rules:
+- JSON only.
+- 2 easy, 2 medium, 2 hard.
+- Questions must be practical and role-relevant.
+    `;
 
-// Health check
+    const payload = {
+      contents: [{ parts: [{ text: "Generate questions" }] }],
+      systemInstruction: { parts: [{ text: systemInstruction }] },
+      generationConfig: { responseMimeType: "application/json" },
+    };
+
+    const response = await axios.post(GEMINI_URL, payload, {
+      headers: { "Content-Type": "application/json" },
+    });
+
+    const content =
+      response.data?.candidates?.[0]?.content?.parts?.[0]?.text || "[]";
+
+    res.json({ questions: JSON.parse(content) });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to generate questions" });
+  }
+});
+
+// ---------------- AI Scoring ----------------
+app.post("/score", async (req, res) => {
+  try {
+    const { candidate, questions } = req.body;
+
+    const systemInstruction = `
+You are an interviewer. Evaluate answers.
+
+Input:
+Candidate: ${JSON.stringify(candidate)}
+Questions & Answers: ${JSON.stringify(questions)}
+
+Output JSON only:
+{
+  "score": "0-100",
+  "summary": "short performance summary"
+}
+    `;
+
+    const payload = {
+      contents: [{ parts: [{ text: "Evaluate candidate" }] }],
+      systemInstruction: { parts: [{ text: systemInstruction }] },
+      generationConfig: { responseMimeType: "application/json" },
+    };
+
+    const response = await axios.post(GEMINI_URL, payload, {
+      headers: { "Content-Type": "application/json" },
+    });
+
+    const content =
+      response.data?.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
+
+    res.json(JSON.parse(content));
+  } catch (err) {
+    res.status(500).json({ error: "Failed to score candidate" });
+  }
+});
+
+// ---------------- Health ----------------
 app.get("/health", (req, res) => {
-  res.json({ status: "OK", message: "Server running", timestamp: new Date().toISOString() });
+  res.json({ status: "OK", timestamp: new Date().toISOString() });
 });
 
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-});
+app.listen(PORT, () =>
+  console.log(`🚀 Server running at http://localhost:${PORT}`)
+);
