@@ -66,30 +66,33 @@ export function WelcomeBackDialog({
             {icon}
             Welcome Back!
           </DialogTitle>
-          <DialogDescription className="space-y-3">
-            <div>
-              <p className="font-medium text-foreground">{status}</p>
-              <p className="text-sm">{description}</p>
-            </div>
-            
-            <div className="bg-muted p-3 rounded-md space-y-1">
-              <div className="text-sm">
-                <strong>Candidate:</strong> {session.userData.name || "Unknown"}
-              </div>
-              <div className="text-sm">
-                <strong>Last activity:</strong> {timeAgoText}
-              </div>
-              {session.interviewStarted && (
-                <div className="text-sm">
-                  <strong>Progress:</strong> {session.currentQuestionIndex}/{session.questions.length} questions
-                </div>
-              )}
-            </div>
-            
-            <p className="text-xs text-muted-foreground">
-              You can resume where you left off or start a completely new interview.
-            </p>
-          </DialogDescription>
+          <DialogDescription asChild>
+  <div className="space-y-3">
+    <div>
+      <p className="font-medium text-foreground">{status}</p>
+      <p className="text-sm">{description}</p>
+    </div>
+
+    <div className="bg-muted p-3 rounded-md space-y-1">
+      <div className="text-sm">
+        <strong>Candidate:</strong> {session.userData.name || "Unknown"}
+      </div>
+      <div className="text-sm">
+        <strong>Last activity:</strong> {timeAgoText}
+      </div>
+      {session.interviewStarted && (
+        <div className="text-sm">
+          <strong>Progress:</strong> {session.currentQuestionIndex}/{session.questions.length} questions
+        </div>
+      )}
+    </div>
+
+    <p className="text-xs text-muted-foreground">
+      You can resume where you left off or start a completely new interview.
+    </p>
+  </div>
+</DialogDescription>
+
         </DialogHeader>
         <DialogFooter className="flex-col gap-2 sm:flex-row">
           <Button 

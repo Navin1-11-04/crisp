@@ -1,54 +1,60 @@
 import { useState, useEffect } from "react";
+import { useSelector, useDispatch } from "react-redux";
 import Upload from "./upload";
 import Chat from "./chat";
 import { WelcomeBackDialog } from "./dialogs/welcome-back-dialog";
+import { InterviewOnboard } from "./interview-onboard";
+import type { RootState } from "@/store";
+import { createNewSession, clearCurrentSession } from "@/store/interviewSlice";
+
+const SESSION_TIMEOUT = 24 * 60 * 60 * 1000;
 
 export const ChatTab = () => {
-  const { 
-    currentSession,
-    hasUnfinishedSession,
-    isSessionExpired,
-    createNewSession,
-    clearCurrentSession
-  } = useInterviewStore();
-  
-  const [extractedInfo, setExtractedInfo] = useState(null);
-  const [showWelcomeBack, setShowWelcomeBack] = useState(false);
+  const dispatch = useDispatch();
+  const currentSession = useSelector((state: RootState) => state.interview.currentSession);
 
-  // Check for existing session on component mount
+  const [showWelcomeBack, setShowWelcomeBack] = useState(false);
+  const [showOnboard, setShowOnboard] = useState(!currentSession); // show onboarding only if no active session
+
   useEffect(() => {
-    if (hasUnfinishedSession() && !isSessionExpired()) {
-      setShowWelcomeBack(true);
-    } else if (hasUnfinishedSession() && isSessionExpired()) {
-      // Clear expired session
-      clearCurrentSession();
+    if (currentSession && !currentSession.interviewCompleted) {
+      const timeSinceLastActive = Date.now() - currentSession.lastActiveAt;
+      const isExpired = timeSinceLastActive > SESSION_TIMEOUT;
+
+      if (isExpired) {
+        dispatch(clearCurrentSession());
+      } else {
+        setShowWelcomeBack(true);
+      }
     }
   }, []);
 
   const handleExtracted = (info: any) => {
-    setExtractedInfo(info);
-    createNewSession(info);
+    dispatch(createNewSession(info));
   };
 
   const handleResumeSession = () => {
     setShowWelcomeBack(false);
-    // Session is already loaded, just hide the dialog
   };
 
   const handleStartNewSession = () => {
     setShowWelcomeBack(false);
-    clearCurrentSession();
-    setExtractedInfo(null);
+    setShowOnboard(true); // go back to onboarding
+    dispatch(clearCurrentSession());
   };
-  
+
+  if (showOnboard) {
+    return <InterviewOnboard onContinue={() => setShowOnboard(false)} />;
+  }
+
   return (
-    <div className="flex-1 flex flex-col h-full w-full px-4 py-2 md:px-6 md:py-4">
+    <div className="flex-1 flex flex-col h-full w-full">
       {!currentSession ? (
         <Upload onExtracted={handleExtracted} />
       ) : (
         <Chat extracted={currentSession.extractedInfo} />
       )}
-      
+
       {showWelcomeBack && currentSession && (
         <WelcomeBackDialog
           open={showWelcomeBack}
@@ -58,5 +64,5 @@ export const ChatTab = () => {
         />
       )}
     </div>
-  )
-}
+  );
+};

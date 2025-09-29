@@ -2,6 +2,7 @@ import {
   LayoutDashboard,
   MessageCircle,
   SettingsIcon,
+  UserRound,
 } from "lucide-react"
 
 import { Badge } from "@/components/ui/badge"
@@ -16,7 +17,7 @@ import { ChatTab } from "./chat-tab"
 export default function TabsArea() {
   return (
     <Tabs defaultValue="chat" className="flex-1 flex flex-col w-full h-full bg-background">
-      <TabsList className="h-auto gap-2 rounded-none border-b bg-transparent px-4 md:px-6 py-1 w-full">
+      <TabsList className="h-auto gap-2 rounded-none border-b bg-transparent py-1 w-full">
         <TabsTrigger
           value="chat"
           className="group text-muted-foreground hover:bg-accent hover:text-foreground 
@@ -51,19 +52,8 @@ export default function TabsArea() {
             Dashboard
           </Badge>
         </TabsTrigger>
-        <TabsTrigger
-          value="settings"
-          className="ml-auto text-muted-foreground hover:bg-accent hover:text-foreground 
-                     data-[state=active]:text-foreground 
-                     data-[state=active]:after:bg-primary 
-                     relative after:absolute after:inset-x-0 after:bottom-0 after:-mb-1 after:h-0.5 
-                     data-[state=active]:bg-transparent data-[state=active]:shadow-none flex items-center"
-        >
-          <SettingsIcon className="-ms-0.5 me-1.5 opacity-60" size={16} />
-          Settings
-        </TabsTrigger>
       </TabsList>
-      <TabsContent value="chat" className="flex-1 flex flex-col w-full h-full">
+      <TabsContent value="chat" className="flex-1 flex flex-col w-full h-full py-2">
         <ChatTab/>
       </TabsContent>
       <TabsContent value="dashboard" className="flex-1 flex flex-col h-full w-full">

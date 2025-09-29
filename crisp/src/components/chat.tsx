@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from "react";
+import { useSelector, useDispatch } from "react-redux";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
-import { Loader2, MessageSquare, MicIcon, Bot, User, Pause, Play } from "lucide-react";
+import { Loader2, MessageSquare, MicIcon, Bot, User, Pause, Play, Home, CheckCircle2 } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import axios from "axios";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -23,26 +24,27 @@ import {
   PromptInputTools,
 } from "./ai-elements/prompt-input";
 import { StartInterviewDialog } from "./dialogs/interview-dialog";
+import { CompletionDialog } from "./dialogs/completion-dialog";
 import type { ExtractedInfo } from "@/store/types";
+import type { RootState } from "@/store";
+import {
+  addMessage,
+  updateUserData,
+  setVerified,
+  startInterview,
+  updateQuestion,
+  nextQuestion,
+  updateTimer,
+  completeInterview,
+  clearCurrentSession,
+} from "@/store/interviewSlice";
 
 export default function Chat({ extracted }: { extracted: ExtractedInfo }) {
-  const {
-    currentSession,
-    updateCurrentSession,
-    addMessage,
-    updateUserData,
-    setVerified,
-    startInterview,
-    updateQuestion,
-    nextQuestion,
-    updateTimer,
-    pauseInterview,
-    resumeInterview,
-    completeInterview,
-    getCurrentQuestion,
-  } = useInterviewStore();
+  const dispatch = useDispatch();
+  const currentSession = useSelector((state: RootState) => state.interview.currentSession);
 
   const [showStartDialog, setShowStartDialog] = useState(false);
+  const [showCompletionDialog, setShowCompletionDialog] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [transcript, setTranscript] = useState("");
   const [isRecording, setIsRecording] = useState(false);
@@ -51,20 +53,19 @@ export default function Chat({ extracted }: { extracted: ExtractedInfo }) {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Initialize session if not exists
-  useEffect(() => {
-    if (!currentSession) {
-      // This should not happen as session is created in upload component
-      console.warn("No current session found in Chat component");
-    }
-  }, [currentSession]);
-
   // Handle verification completion
   useEffect(() => {
     if (currentSession?.verified && !currentSession.interviewStarted) {
       setShowStartDialog(true);
     }
   }, [currentSession?.verified, currentSession?.interviewStarted]);
+
+  // Show completion dialog when interview is done
+  useEffect(() => {
+    if (currentSession?.interviewCompleted && currentSession.finalScore !== undefined) {
+      setShowCompletionDialog(true);
+    }
+  }, [currentSession?.interviewCompleted, currentSession?.finalScore]);
 
   // Auto-scroll to bottom
   useEffect(() => {
@@ -73,32 +74,30 @@ export default function Chat({ extracted }: { extracted: ExtractedInfo }) {
 
   // Timer management
   useEffect(() => {
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
+
     if (
       !currentSession?.interviewStarted || 
-      currentSession.isPaused ||
-      currentSession.timeLeft === null ||
-      currentSession.timeLeft === 0
+      currentSession.interviewCompleted ||
+      currentSession.timeLeft === null
     ) {
-      if (timerRef.current) {
-        clearInterval(timerRef.current);
-        timerRef.current = null;
-      }
       return;
     }
 
-    // Handle time up
     if (currentSession.timeLeft === 0) {
       handleAutoSubmit();
       return;
     }
 
-    // Start/continue timer
     timerRef.current = setInterval(() => {
-      const newTime = Math.max(0, (currentSession.timeLeft || 0) - 1);
-      updateTimer(newTime);
-      
-      if (newTime === 0) {
-        handleAutoSubmit();
+      const currentTime = currentSession.timeLeft || 0;
+      if (currentTime <= 1) {
+        dispatch(updateTimer(0));
+      } else {
+        dispatch(updateTimer(currentTime - 1));
       }
     }, 1000);
 
@@ -108,22 +107,16 @@ export default function Chat({ extracted }: { extracted: ExtractedInfo }) {
         timerRef.current = null;
       }
     };
-  }, [
-    currentSession?.interviewStarted, 
-    currentSession?.isPaused,
-    currentSession?.timeLeft,
-    currentSession?.currentQuestionIndex
-  ]);
+  }, [currentSession?.interviewStarted, currentSession?.timeLeft]);
 
-  // Start Interview Handler
   const handleStartInterview = async () => {
     setShowStartDialog(false);
     setIsLoading(true);
 
-    addMessage({
+    dispatch(addMessage({
       role: "assistant",
       content: "Great! Let's start the interview. You'll get 6 questions: 2 easy (20s each), 2 medium (60s each), and 2 hard (120s each).",
-    });
+    }));
 
     try {
       const res = await axios.post("http://localhost:5000/generate-questions", {
@@ -131,59 +124,59 @@ export default function Chat({ extracted }: { extracted: ExtractedInfo }) {
       });
 
       const aiQuestions = res.data.questions;
-      startInterview(aiQuestions);
+      dispatch(startInterview(aiQuestions));
 
-      addMessage({
+      dispatch(addMessage({
         role: "assistant",
-        content: aiQuestions[0].text,
-      });
+        content: `**Question 1 of 6** (${aiQuestions[0].level})\n\n${aiQuestions[0].text}`,
+      }));
     } catch (err) {
       console.error("Error fetching AI questions", err);
-      addMessage({
+      dispatch(addMessage({
         role: "assistant", 
         content: "Sorry, there was an error generating questions. Please try again.",
-      });
+      }));
     } finally {
       setIsLoading(false);
     }
   };
 
-  // Auto Submit Answer
   const handleAutoSubmit = () => {
     if (!currentSession) return;
 
-    const currentQ = getCurrentQuestion();
+    const currentQ = currentSession.questions[currentSession.currentQuestionIndex];
     if (!currentQ) return;
 
-    const answer = transcript.trim() || "[No Answer]";
+    const answer = transcript.trim() || "[No Answer - Time Expired]";
     const timeTaken = currentQ.timeLimit - (currentSession.timeLeft || 0);
 
-    // Update current question with answer
-    updateQuestion(currentSession.currentQuestionIndex, {
-      answer,
-      timeTaken,
-    });
+    dispatch(updateQuestion({
+      index: currentSession.currentQuestionIndex,
+      updates: { answer, timeTaken }
+    }));
 
-    // Add user message
-    addMessage({
+    dispatch(addMessage({
       role: "user",
       content: answer,
-    });
+    }));
 
     setTranscript("");
 
-    // Check if more questions remain
-    if (currentSession.currentQuestionIndex + 1 < currentSession.questions.length) {
-      // Move to next question
-      nextQuestion();
-      const nextQ = currentSession.questions[currentSession.currentQuestionIndex + 1];
+    const isLastQuestion = currentSession.currentQuestionIndex + 1 >= currentSession.questions.length;
+    
+    if (!isLastQuestion) {
+      const nextIndex = currentSession.currentQuestionIndex + 1;
+      dispatch(nextQuestion());
       
-      addMessage({
-        role: "assistant",
-        content: nextQ.text,
-      });
+      const nextQ = currentSession.questions[nextIndex];
+      
+      setTimeout(() => {
+        dispatch(addMessage({
+          role: "assistant",
+          content: `**Question ${nextIndex + 1} of 6** (${nextQ.level})\n\n${nextQ.text}`,
+        }));
+      }, 500);
     } else {
-      // Finish interview
       handleFinishInterview();
     }
   };
@@ -192,7 +185,11 @@ export default function Chat({ extracted }: { extracted: ExtractedInfo }) {
     if (!currentSession) return;
 
     setIsLoading(true);
-    updateCurrentSession({ interviewStarted: false, timeLeft: null });
+
+    dispatch(addMessage({
+      role: "assistant",
+      content: "⏳ Calculating your final score...",
+    }));
 
     try {
       const res = await axios.post("http://localhost:5000/score", {
@@ -202,32 +199,40 @@ export default function Chat({ extracted }: { extracted: ExtractedInfo }) {
 
       const { score, summary } = res.data;
       
-      addMessage({
+      dispatch(addMessage({
         role: "assistant",
-        content: `🎉 Interview completed!\n\n**Final Score: ${score}/100**\n\n**Summary:** ${summary}`,
-      });
+        content: `🎉 **Interview Completed!**\n\n**Final Score: ${score}/100**\n\n**Summary:** ${summary}\n\nThank you for participating!`,
+      }));
 
-      // Complete the interview and move to completed sessions
-      completeInterview(score, summary);
+      // Mark interview as completed (but don't move to completedSessions yet)
+      dispatch(completeInterview({ score, summary }));
       
     } catch (err) {
       console.error("Error scoring interview", err);
-      addMessage({
+      
+      const answeredQuestions = currentSession.questions.filter(q => q.answer && !q.answer.includes("No Answer")).length;
+      const fallbackScore = Math.round((answeredQuestions / currentSession.questions.length) * 70 + 20);
+      
+      dispatch(addMessage({
         role: "assistant",
-        content: "Interview completed! There was an error calculating your score, but your responses have been saved.",
-      });
+        content: `🎉 **Interview Completed!**\n\n**Final Score: ${fallbackScore}/100**\n\nYour responses have been saved. Thank you for participating!`,
+      }));
+
+      dispatch(completeInterview({ 
+        score: fallbackScore, 
+        summary: `Completed ${answeredQuestions} out of ${currentSession.questions.length} questions.` 
+      }));
     } finally {
       setIsLoading(false);
     }
   };
 
-  // Manual Submit (when user clicks submit or presses enter)
   const handleManualSubmit = () => {
-    if (currentSession?.interviewStarted) {
-      // Stop timer and submit answer
+    if (!transcript.trim()) return;
+
+    if (currentSession?.interviewStarted && !currentSession.interviewCompleted) {
       handleAutoSubmit();
-    } else {
-      // Handle chat verification
+    } else if (!currentSession?.verified) {
       handleChatSubmit();
     }
   };
@@ -238,10 +243,10 @@ export default function Chat({ extracted }: { extracted: ExtractedInfo }) {
     const userMessage = transcript.trim();
     if (!userMessage) return;
 
-    addMessage({
+    dispatch(addMessage({
       role: "user",
       content: userMessage,
-    });
+    }));
     
     setTranscript("");
     setIsLoading(true);
@@ -254,34 +259,32 @@ export default function Chat({ extracted }: { extracted: ExtractedInfo }) {
 
       const { reply, state, verified } = response.data;
       
-      updateUserData(state);
-      addMessage({
+      dispatch(updateUserData(state));
+      dispatch(addMessage({
         role: "assistant",
         content: reply,
-      });
+      }));
       
       if (verified) {
-        setVerified(true);
+        dispatch(setVerified(true));
       }
     } catch (err) {
       console.error("Chat error:", err);
-      addMessage({
+      dispatch(addMessage({
         role: "assistant",
         content: "Sorry, I'm having trouble processing your message. Please try again.",
-      });
+      }));
     } finally {
       setIsLoading(false);
     }
   };
 
-  // Recording functions
   const startRecording = () => {
     const SpeechRecognition =
       (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
       
     if (!SpeechRecognition) {
       console.warn("Speech recognition not supported in this browser");
-      // Fallback: focus on text input
       const textarea = document.querySelector('textarea[placeholder*="answer"]') as HTMLTextAreaElement;
       if (textarea) textarea.focus();
       return;
@@ -294,26 +297,36 @@ export default function Chat({ extracted }: { extracted: ExtractedInfo }) {
 
     recognition.onstart = () => {
       setIsRecording(true);
-      setTranscript("");
     };
 
     recognition.onresult = (event: any) => {
-      let interim = "";
-      let final = "";
+      let interimTranscript = "";
+      let finalTranscript = "";
       
       for (let i = event.resultIndex; i < event.results.length; i++) {
         const text = event.results[i][0].transcript;
         if (event.results[i].isFinal) {
-          final += text + " ";
+          finalTranscript += text + " ";
         } else {
-          interim += text;
+          interimTranscript += text;
         }
       }
       
-      setTranscript((prev) => prev + final || interim);
+      if (finalTranscript) {
+        setTranscript((prev) => prev + finalTranscript);
+      } else if (interimTranscript) {
+        setTranscript((prev) => {
+          const withoutInterim = prev.split('[interim]')[0] || prev;
+          return withoutInterim + '[interim]' + interimTranscript;
+        });
+      }
     };
 
-    recognition.onend = () => setIsRecording(false);
+    recognition.onend = () => {
+      setIsRecording(false);
+      setTranscript(prev => prev.split('[interim]')[0] || prev);
+    };
+
     recognition.onerror = (event: any) => {
       console.error("Speech recognition error:", event.error);
       setIsRecording(false);
@@ -342,10 +355,21 @@ export default function Chat({ extracted }: { extracted: ExtractedInfo }) {
     if (!currentSession) return;
     
     if (currentSession.isPaused) {
-      resumeInterview();
+      dispatch(resumeInterview());
     } else {
-      pauseInterview();
+      dispatch(pauseInterview());
     }
+  };
+
+  const handleStartNewInterview = () => {
+    setShowCompletionDialog(false);
+    dispatch(clearCurrentSession());
+  };
+
+  const handleViewDashboard = () => {
+    setShowCompletionDialog(false);
+    // TODO: Switch to dashboard tab
+    // You'll need to implement tab switching logic
   };
 
   if (!currentSession) {
@@ -356,15 +380,25 @@ export default function Chat({ extracted }: { extracted: ExtractedInfo }) {
     );
   }
 
-  const currentQuestion = getCurrentQuestion();
+  const currentQuestion = currentSession.questions[currentSession.currentQuestionIndex];
   const isInterviewActive = currentSession.interviewStarted && !currentSession.interviewCompleted;
 
   return (
     <div className="flex flex-col gap-6 w-full max-w-2xl mx-auto relative">
       {/* Candidate Info Card */}
       <Card>
-        <CardHeader>
+        <CardHeader className="flex flex-row items-center justify-between">
           <CardTitle>Candidate Information</CardTitle>
+          {currentSession.interviewCompleted && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={handleStartNewInterview}
+            >
+              <Home className="w-4 h-4 mr-2" />
+              New Interview
+            </Button>
+          )}
         </CardHeader>
         <CardContent className="space-y-1 text-sm">
           <div>
@@ -379,6 +413,22 @@ export default function Chat({ extracted }: { extracted: ExtractedInfo }) {
           {isInterviewActive && (
             <div className="pt-2 border-t">
               <strong>Progress:</strong> {currentSession.currentQuestionIndex + 1}/{currentSession.questions.length} questions
+            </div>
+          )}
+          {currentSession.interviewCompleted && currentSession.finalScore !== undefined && (
+            <div className="pt-2 border-t">
+              <div className="flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4 text-green-600" />
+                <strong>Final Score:</strong> 
+                <span className={`font-bold ${
+                  currentSession.finalScore >= 86 ? 'text-green-600' :
+                  currentSession.finalScore >= 76 ? 'text-blue-600' :
+                  currentSession.finalScore >= 61 ? 'text-yellow-600' :
+                  'text-red-600'
+                }`}>
+                  {currentSession.finalScore}/100
+                </span>
+              </div>
             </div>
           )}
         </CardContent>
@@ -433,7 +483,6 @@ export default function Chat({ extracted }: { extracted: ExtractedInfo }) {
                     >
                       {m.role === "assistant" && (
                         <Avatar className="w-8 h-8 flex-shrink-0">
-                          <AvatarImage src="/ai-avatar.png" alt="AI" />
                           <AvatarFallback className="bg-blue-100">
                             <Bot size={16} className="text-blue-600" />
                           </AvatarFallback>
@@ -457,7 +506,6 @@ export default function Chat({ extracted }: { extracted: ExtractedInfo }) {
 
                       {m.role === "user" && (
                         <Avatar className="w-8 h-8 flex-shrink-0">
-                          <AvatarImage src="/user-avatar.png" alt="User" />
                           <AvatarFallback className="bg-blue-600">
                             <User size={16} className="text-white" />
                           </AvatarFallback>
@@ -471,7 +519,6 @@ export default function Chat({ extracted }: { extracted: ExtractedInfo }) {
               {isLoading && (
                 <div className="flex gap-3 justify-start mt-4">
                   <Avatar className="w-8 h-8 flex-shrink-0">
-                    <AvatarImage src="/ai-avatar.png" alt="AI" />
                     <AvatarFallback className="bg-blue-100">
                       <Bot size={16} className="text-blue-600" />
                     </AvatarFallback>
@@ -494,15 +541,16 @@ export default function Chat({ extracted }: { extracted: ExtractedInfo }) {
 
       {/* Status Alerts */}
       {isInterviewActive && currentSession.timeLeft !== null && !currentSession.isPaused && (
-        <Alert className={`absolute top-2 right-2 p-2 text-sm ${
+        <Alert className={`absolute top-2 right-2 p-2 text-sm shadow-lg ${
           currentSession.timeLeft <= 10 
-            ? 'bg-red-50 border-red-300' 
+            ? 'bg-red-50 border-red-400 animate-pulse' 
             : 'bg-blue-50 border-blue-300'
         }`}>
-          <AlertDescription>
-            ⏳ Time left: {currentSession.timeLeft}s
+          <AlertDescription className="flex items-center gap-2">
+            <span className="text-lg">⏳</span>
+            <span className="font-semibold">Time: {currentSession.timeLeft}s</span>
             {currentQuestion && (
-              <span className="ml-2 text-xs opacity-75">
+              <span className="text-xs opacity-75 ml-1">
                 ({currentQuestion.level})
               </span>
             )}
@@ -511,17 +559,20 @@ export default function Chat({ extracted }: { extracted: ExtractedInfo }) {
       )}
 
       {currentSession.isPaused && (
-        <Alert className="absolute top-2 right-2 bg-yellow-50 border-yellow-300 p-2 text-sm">
+        <Alert className="absolute top-2 right-2 bg-yellow-50 border-yellow-300 p-2 text-sm shadow-lg">
           <AlertDescription>⏸️ Interview Paused</AlertDescription>
         </Alert>
       )}
 
       {isRecording && (
-        <Alert className="absolute top-12 right-2 bg-red-50 border-red-300 p-2 text-sm max-w-xs">
+        <Alert className="absolute top-12 right-2 bg-red-50 border-red-300 p-2 text-sm max-w-xs shadow-lg">
           <AlertDescription>
-            🎙️ Recording...
-            {transcript && (
-              <div className="mt-1 text-xs opacity-75 truncate">
+            <div className="flex items-center gap-2">
+              <span className="animate-pulse">🎙️</span>
+              <span>Recording...</span>
+            </div>
+            {transcript && !transcript.includes('[interim]') && (
+              <div className="mt-1 text-xs opacity-75 line-clamp-2">
                 "{transcript}"
               </div>
             )}
@@ -530,65 +581,59 @@ export default function Chat({ extracted }: { extracted: ExtractedInfo }) {
       )}
 
       {/* Input Area */}
-      <PromptInput
-        onSubmit={handleManualSubmit}
-        className="border rounded-lg bg-background"
-      >
-        <PromptInputBody>
-          <PromptInputTextarea
-            placeholder={
-              !currentSession.verified
-                ? "Confirm or correct your details..."
-                : isInterviewActive && !currentSession.isPaused
-                ? `Type your answer... (${currentSession.timeLeft || 0}s left)`
-                : currentSession.interviewCompleted
-                ? "Interview completed!"
-                : "Click Start Interview to begin"
-            }
-            disabled={
-              (currentSession.verified && !isInterviewActive) || 
-              currentSession.interviewCompleted ||
-              currentSession.isPaused
-            }
-            value={transcript}
-            onChange={(e) => setTranscript(e.target.value)}
-          />
-        </PromptInputBody>
-        <PromptInputToolbar>
-          <PromptInputTools>
-            <PromptInputButton 
-              onClick={toggleRecording}
+      {!currentSession.interviewCompleted && (
+        <PromptInput
+          onSubmit={handleManualSubmit}
+          className="border rounded-lg bg-background"
+        >
+          <PromptInputBody>
+            <PromptInputTextarea
+              placeholder={
+                !currentSession.verified
+                  ? "Confirm or correct your details..."
+                  : isInterviewActive && !currentSession.isPaused
+                  ? `Type your answer... (${currentSession.timeLeft || 0}s left)`
+                  : "Click Start Interview to begin"
+              }
               disabled={
-                currentSession.interviewCompleted ||
+                (currentSession.verified && !isInterviewActive) || 
                 currentSession.isPaused
               }
-              className={isRecording ? "bg-red-100 text-red-600" : ""}
-            >
-              <MicIcon size={16} />
-            </PromptInputButton>
-          </PromptInputTools>
-          <PromptInputSubmit 
-            disabled={
-              (currentSession.verified && !isInterviewActive) || 
-              currentSession.interviewCompleted ||
-              currentSession.isPaused ||
-              !transcript.trim()
-            }
-          />
-        </PromptInputToolbar>
-      </PromptInput>
+              value={transcript.split('[interim]')[0] || transcript}
+              onChange={(e) => setTranscript(e.target.value)}
+            />
+          </PromptInputBody>
+          <PromptInputToolbar>
+            <PromptInputTools>
+              <PromptInputButton 
+                onClick={toggleRecording}
+                disabled={
+                  currentSession.isPaused ||
+                  (!currentSession.verified && currentSession.verified !== undefined)
+                }
+                className={isRecording ? "bg-red-100 text-red-600" : ""}
+                title={isRecording ? "Stop recording" : "Start recording"}
+              >
+                <MicIcon size={16} />
+              </PromptInputButton>
+            </PromptInputTools>
+            <PromptInputSubmit 
+              disabled={
+                (currentSession.verified && !isInterviewActive) || 
+                currentSession.isPaused ||
+                !transcript.trim()
+              }
+            />
+          </PromptInputToolbar>
+        </PromptInput>
+      )}
 
       {/* Status Messages */}
       {currentSession.verified && !isInterviewActive && !currentSession.interviewCompleted && (
-        <Alert className="bg-green-100 border-green-400 text-green-800">
-          <AlertDescription>✅ All details verified successfully! Ready to start interview.</AlertDescription>
-        </Alert>
-      )}
-
-      {currentSession.interviewCompleted && (
-        <Alert className="bg-blue-100 border-blue-400 text-blue-800">
-          <AlertDescription>
-            🎉 Interview completed! Final score: {currentSession.finalScore}/100
+        <Alert className="bg-green-50 border-green-400">
+          <AlertDescription className="text-green-800 flex items-center gap-2">
+            <span>✅</span>
+            <span>All details verified! Ready to start the interview.</span>
           </AlertDescription>
         </Alert>
       )}
@@ -598,6 +643,17 @@ export default function Chat({ extracted }: { extracted: ExtractedInfo }) {
         open={showStartDialog} 
         onStart={handleStartInterview} 
       />
+
+      {currentSession.interviewCompleted && (
+        <CompletionDialog
+          open={showCompletionDialog}
+          score={currentSession.finalScore || 0}
+          summary={currentSession.finalSummary || ""}
+          candidateName={currentSession.userData.name}
+          onStartNew={handleStartNewInterview}
+          onViewDashboard={handleViewDashboard}
+        />
+      )}
     </div>
   );
 }

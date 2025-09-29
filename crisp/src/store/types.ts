@@ -36,6 +36,5 @@ export type InterviewSession = {
   finalSummary?: string;
   startedAt?: number;
   completedAt?: number;
-  isPaused: boolean;
   lastActiveAt: number;
 };

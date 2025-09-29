@@ -1,20 +1,20 @@
 import ThemeToggle from "@/components/theme-toggle"
+import { Bubbles } from "lucide-react"
 
 
-export default function Header() {
+export const Header = () => {
 
   return (
-    <header className="px-4 md:px-6">
-      <div className="flex h-12 items-center justify-between gap-4">
-        <div className="flex flex-1 items-center gap-2">
-            <a href="#" className="text-primary hover:text-primary/90 font-semibold tracking-tight text-lg">
+    <header className="w-full h-auto text-primary flex items-center justify-between px-4 md:px-6 py-1.5 font-poppins">
+        <div className="group/hover flex-1 flex items-center gap-1 hover:text-primary/50 transition-all duration-300">
+            <Bubbles className="w-4 h-4" strokeWidth={2.3}/>
+            <a href="/" className="font-medium tracking-tight text-base leading-0">
               crisp
             </a>
         </div>
         <div className="flex items-center gap-2">
           <ThemeToggle />
         </div>
-      </div>
     </header>
   )
 }

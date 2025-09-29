@@ -1,9 +1,6 @@
-import { createSlice } from "@reduxjs/toolkit";
+import { createSlice} from "@reduxjs/toolkit";
 import type { PayloadAction } from "@reduxjs/toolkit";
 import type { InterviewSession, ChatMessage, ExtractedInfo, Question } from "./types";
-
-
-const SESSION_TIMEOUT = 24 * 60 * 60 * 1000; // 24 hours
 
 interface InterviewState {
   currentSession: InterviewSession | null;
@@ -12,7 +9,7 @@ interface InterviewState {
 
 const initialState: InterviewState = {
   currentSession: null,
-  completedSessions: []
+  completedSessions: [],
 };
 
 const interviewSlice = createSlice({
@@ -25,7 +22,7 @@ const interviewSlice = createSlice({
         id: 1,
         role: "assistant",
         content: "Hi! I've extracted some details from your resume. Can you help me confirm or fill in the missing info?",
-        timestamp: Date.now()
+        timestamp: Date.now(),
       };
 
       state.currentSession = {
@@ -39,8 +36,7 @@ const interviewSlice = createSlice({
         questions: [],
         currentQuestionIndex: 0,
         timeLeft: null,
-        isPaused: false,
-        lastActiveAt: Date.now()
+        lastActiveAt: Date.now(),
       };
     },
 
@@ -49,7 +45,7 @@ const interviewSlice = createSlice({
         state.currentSession = {
           ...state.currentSession,
           ...action.payload,
-          lastActiveAt: Date.now()
+          lastActiveAt: Date.now(),
         };
       }
     },
@@ -59,7 +55,7 @@ const interviewSlice = createSlice({
         const newMessage: ChatMessage = {
           ...action.payload,
           id: Date.now() + Math.random(),
-          timestamp: Date.now()
+          timestamp: Date.now(),
         };
         state.currentSession.messages.push(newMessage);
         state.currentSession.lastActiveAt = Date.now();
@@ -96,7 +92,7 @@ const interviewSlice = createSlice({
       if (state.currentSession) {
         state.currentSession.questions[index] = {
           ...state.currentSession.questions[index],
-          ...updates
+          ...updates,
         };
         state.currentSession.lastActiveAt = Date.now();
       }
@@ -119,39 +115,20 @@ const interviewSlice = createSlice({
       }
     },
 
-    pauseInterview: (state) => {
-      if (state.currentSession) {
-        state.currentSession.isPaused = true;
-        state.currentSession.lastActiveAt = Date.now();
-      }
-    },
-
-    resumeInterview: (state) => {
-      if (state.currentSession) {
-        state.currentSession.isPaused = false;
-        state.currentSession.lastActiveAt = Date.now();
-      }
-    },
-
     completeInterview: (state, action: PayloadAction<{ score: number; summary: string }>) => {
       if (state.currentSession) {
-        const completed = {
-          ...state.currentSession,
-          interviewCompleted: true,
-          finalScore: action.payload.score,
-          finalSummary: action.payload.summary,
-          completedAt: Date.now(),
-          lastActiveAt: Date.now()
-        };
-        state.completedSessions.push(completed);
-        state.currentSession = null;
+        state.currentSession.interviewCompleted = true;
+        state.currentSession.finalScore = action.payload.score;
+        state.currentSession.finalSummary = action.payload.summary;
+        state.currentSession.completedAt = Date.now();
+        state.currentSession.lastActiveAt = Date.now();
       }
     },
 
     clearCurrentSession: (state) => {
       state.currentSession = null;
-    }
-  }
+    },
+  },
 });
 
 export const {
@@ -164,10 +141,8 @@ export const {
   updateQuestion,
   nextQuestion,
   updateTimer,
-  pauseInterview,
-  resumeInterview,
   completeInterview,
-  clearCurrentSession
+  clearCurrentSession,
 } = interviewSlice.actions;
 
 export default interviewSlice.reducer;
