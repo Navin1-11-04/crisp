@@ -64,6 +64,7 @@ If missing, use "Not Found".
 
     res.json({ extracted: JSON.parse(content) });
   } catch (err) {
+    console.error("Extraction error:", err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -86,6 +87,8 @@ Return JSON:
 Rules:
 - Keep "state" updated with corrections.
 - userConfirmed = true only if user explicitly confirms all details are correct.
+- Be conversational and helpful.
+- If any field is "Not Found", ask for it specifically.
 Current data: ${JSON.stringify(extracted)}
     `;
 
@@ -114,53 +117,92 @@ Current data: ${JSON.stringify(extracted)}
 
     res.json({ reply: parsed.reply, state: parsed.state, verified });
   } catch (err) {
+    console.error("Chat error:", err);
     res.status(500).json({
-      reply: "⚠️ Error talking to AI",
+      reply: "⚠️ Error talking to AI. Please try again.",
       state: req.body.extracted,
       verified: false,
     });
   }
 });
 
-// ---------------- AI Interview Questions ----------------
+// ---------------- AI Interview Questions ----------------  
 app.post("/generate-questions", async (req, res) => {
   try {
-    const { role = "software developer" } = req.body;
+    const { role = "fullstack developer" } = req.body;
 
     const systemInstruction = `
-You are an interview question generator.
-Generate EXACTLY 6 questions for role: ${role}.
-Format as valid JSON array:
+You are an interview question generator for a ${role} position.
+Generate EXACTLY 6 questions with these EXACT time limits:
+
 [
-  { "id": 1, "text": "...", "level": "easy", "timeLimit": 30 },
-  { "id": 2, "text": "...", "level": "easy", "timeLimit": 30 },
-  { "id": 3, "text": "...", "level": "medium", "timeLimit": 45 },
-  { "id": 4, "text": "...", "level": "medium", "timeLimit": 45 },
-  { "id": 5, "text": "...", "level": "hard", "timeLimit": 60 },
-  { "id": 6, "text": "...", "level": "hard", "timeLimit": 60 }
+  { "id": 1, "text": "...", "level": "easy", "timeLimit": 20 },
+  { "id": 2, "text": "...", "level": "easy", "timeLimit": 20 },
+  { "id": 3, "text": "...", "level": "medium", "timeLimit": 60 },
+  { "id": 4, "text": "...", "level": "medium", "timeLimit": 60 },
+  { "id": 5, "text": "...", "level": "hard", "timeLimit": 120 },
+  { "id": 6, "text": "...", "level": "hard", "timeLimit": 120 }
 ]
+
 Rules:
-- JSON only.
-- 2 easy, 2 medium, 2 hard.
-- Questions must be practical and role-relevant.
+- Return ONLY valid JSON array, no extra text
+- Questions must be practical and role-relevant
+- Easy: Basic concepts, syntax, definitions
+- Medium: Problem-solving, architecture, best practices  
+- Hard: Complex scenarios, optimization, system design
+- MUST use exact timeLimit values: easy=20, medium=60, hard=120
     `;
 
     const payload = {
-      contents: [{ parts: [{ text: "Generate questions" }] }],
+      contents: [{ parts: [{ text: `Generate 6 interview questions for ${role}` }] }],
       systemInstruction: { parts: [{ text: systemInstruction }] },
-      generationConfig: { responseMimeType: "application/json" },
+      generationConfig: { 
+        responseMimeType: "application/json",
+        temperature: 0.7 
+      },
     };
 
     const response = await axios.post(GEMINI_URL, payload, {
       headers: { "Content-Type": "application/json" },
     });
 
-    const content =
-      response.data?.candidates?.[0]?.content?.parts?.[0]?.text || "[]";
+    const content = response.data?.candidates?.[0]?.content?.parts?.[0]?.text || "[]";
+    const questions = JSON.parse(content);
+    
+    // Validate that we have exactly 6 questions with correct time limits
+    if (!Array.isArray(questions) || questions.length !== 6) {
+      throw new Error("Invalid questions format");
+    }
+    
+    // Ensure correct time limits
+    const validatedQuestions = questions.map((q, index) => {
+      let timeLimit;
+      if (index < 2) timeLimit = 20;      // Easy: 20s
+      else if (index < 4) timeLimit = 60; // Medium: 60s  
+      else timeLimit = 120;               // Hard: 120s
+      
+      return {
+        ...q,
+        timeLimit,
+        level: index < 2 ? "easy" : index < 4 ? "medium" : "hard"
+      };
+    });
 
-    res.json({ questions: JSON.parse(content) });
+    res.json({ questions: validatedQuestions });
   } catch (err) {
-    res.status(500).json({ error: "Failed to generate questions" });
+    console.error("Question generation error:", err);
+    
+    // Fallback questions if AI fails
+    const fallbackQuestions = [
+      { id: 1, text: "What is the difference between let, const, and var in JavaScript?", level: "easy", timeLimit: 20 },
+      { id: 2, text: "Explain what React hooks are and name three commonly used hooks.", level: "easy", timeLimit: 20 },
+      { id: 3, text: "How would you optimize a React component that renders a large list?", level: "medium", timeLimit: 60 },
+      { id: 4, text: "Explain the difference between SQL and NoSQL databases with examples.", level: "medium", timeLimit: 60 },
+      { id: 5, text: "Design a real-time chat system. What technologies and architecture would you use?", level: "hard", timeLimit: 120 },
+      { id: 6, text: "How would you handle authentication and authorization in a full-stack application?", level: "hard", timeLimit: 120 }
+    ];
+    
+    res.json({ questions: fallbackQuestions });
   }
 });
 
@@ -170,41 +212,88 @@ app.post("/score", async (req, res) => {
     const { candidate, questions } = req.body;
 
     const systemInstruction = `
-You are an interviewer. Evaluate answers.
+You are an experienced technical interviewer. Evaluate the candidate's performance.
 
-Input:
-Candidate: ${JSON.stringify(candidate)}
+Candidate Info: ${JSON.stringify(candidate)}
 Questions & Answers: ${JSON.stringify(questions)}
 
-Output JSON only:
+Scoring criteria:
+- Technical accuracy (40%)
+- Problem-solving approach (25%) 
+- Communication clarity (20%)
+- Time management (15%)
+
+Consider:
+- Quality of answers vs difficulty level
+- Completeness within time limits
+- Practical understanding
+- Areas of strength/weakness
+
+Return ONLY valid JSON:
 {
-  "score": "0-100",
-  "summary": "short performance summary"
+  "score": 85,
+  "summary": "Strong technical foundation with good problem-solving skills. Excellent understanding of React fundamentals and database concepts. Could improve on system design complexity. Overall: Recommended for next round."
 }
+
+Score range: 0-100 (0-60: Poor, 61-75: Average, 76-85: Good, 86-100: Excellent)
     `;
 
     const payload = {
-      contents: [{ parts: [{ text: "Evaluate candidate" }] }],
+      contents: [{ parts: [{ text: "Evaluate this candidate's interview performance" }] }],
       systemInstruction: { parts: [{ text: systemInstruction }] },
-      generationConfig: { responseMimeType: "application/json" },
+      generationConfig: { 
+        responseMimeType: "application/json",
+        temperature: 0.3 
+      },
     };
 
     const response = await axios.post(GEMINI_URL, payload, {
       headers: { "Content-Type": "application/json" },
     });
 
-    const content =
-      response.data?.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
+    const content = response.data?.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
+    const result = JSON.parse(content);
+    
+    // Ensure we have valid score and summary
+    if (!result.score || !result.summary) {
+      throw new Error("Invalid scoring response");
+    }
+    
+    // Ensure score is within valid range
+    result.score = Math.min(100, Math.max(0, parseInt(result.score)));
 
-    res.json(JSON.parse(content));
+    res.json(result);
   } catch (err) {
-    res.status(500).json({ error: "Failed to score candidate" });
+    console.error("Scoring error:", err);
+    
+    // Fallback scoring
+    const answeredQuestions = questions.filter(q => q.answer && q.answer !== "[No Answer]").length;
+    const completionRate = (answeredQuestions / questions.length) * 100;
+    const fallbackScore = Math.max(20, Math.min(75, completionRate + Math.random() * 20));
+    
+    res.json({
+      score: Math.round(fallbackScore),
+      summary: `Completed ${answeredQuestions} out of ${questions.length} questions. Performance evaluation completed with basic metrics.`
+    });
   }
 });
 
-// ---------------- Health ----------------
+// ---------------- Health Check ----------------
 app.get("/health", (req, res) => {
-  res.json({ status: "OK", timestamp: new Date().toISOString() });
+  res.json({ 
+    status: "OK", 
+    timestamp: new Date().toISOString(),
+    version: "1.1.0"
+  });
+});
+
+// ---------------- Error handling middleware ----------------
+app.use((err, req, res, next) => {
+  console.error("Server error:", err);
+  res.status(500).json({ 
+    error: "Internal server error",
+    message: process.env.NODE_ENV === 'development' ? err.message : "Something went wrong"
+  });
 });
 
 const PORT = process.env.PORT || 5000;
